@@ -182,6 +182,8 @@ static inline void brutal_tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
 }
 #include <linux/random.h> // 导入随机数生成头文件
 
+#include <linux/random.h> // 导入随机数生成头文件
+
 static void brutal_update_rate(struct sock *sk)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -219,9 +221,18 @@ static void brutal_update_rate(struct sock *sk)
     rate *= 100;
     rate = div_u64(rate, ack_rate);
 
-    // 引入随机波动: 在80%到100%之间选择一个随机倍率
-    u32 random_fluctuation = 80 + get_random_u32() % 21; // 生成 80-100 范围的随机波动因子
-    rate = div_u64(rate * random_fluctuation, 100); // 应用随机波动因子到发送速率
+    // 设置波动因子更新频率
+    static u32 last_fluctuation_factor = 100;  // 初始波动因子100%
+    static u32 fluctuation_update_counter = 0;
+
+    if (++fluctuation_update_counter % 5 == 0) { // 每5次调用更新一次波动因子
+        u32 fluctuation_min = (ack_rate > 90) ? 75 : 90; // 动态调整波动下限
+        u32 fluctuation_max = 100;
+        last_fluctuation_factor = fluctuation_min + get_random_u32() % (fluctuation_max - fluctuation_min + 1);
+    }
+
+    // 应用随机波动因子
+    rate = div_u64(rate * last_fluctuation_factor, 100);
 
     cwnd = div_u64(rate, MSEC_PER_SEC);
     cwnd *= rtt_ms;
