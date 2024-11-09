@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/version.h>
-#include <linux/random.h>
+#include <linux/random.h> // 导入随机数生成头文件
+#include <linux/delay.h>  // 导入延时头文件
 #include <net/tcp.h>
 #include <linux/math64.h>
 
@@ -180,9 +181,6 @@ static inline void brutal_tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
     WARN_ON_ONCE((int)val <= 0);
     tp->snd_cwnd = val;
 }
-#include <linux/random.h> // 导入随机数生成头文件
-
-#include <linux/random.h> // 导入随机数生成头文件
 
 static void brutal_update_rate(struct sock *sk)
 {
@@ -221,18 +219,27 @@ static void brutal_update_rate(struct sock *sk)
     rate *= 100;
     rate = div_u64(rate, ack_rate);
 
-    // 设置波动因子更新频率
-    static u32 last_fluctuation_factor = 100;  // 初始波动因子100%
-    static u32 fluctuation_update_counter = 0;
+    // 设置自适应波动幅度
+    u32 fluctuation_min = (ack_rate < 90) ? 60 : 90; // 丢包率高时更大的波动范围
+    u32 fluctuation_max = 100;
 
-    if (++fluctuation_update_counter % 5 == 0) { // 每5次调用更新一次波动因子
-        u32 fluctuation_min = (ack_rate > 90) ? 75 : 90; // 动态调整波动下限
-        u32 fluctuation_max = 100;
+    // 变换波动因子更新频率
+    static u32 last_fluctuation_factor = 100;
+    static u32 fluctuation_update_counter = 0;
+    u32 fluctuation_update_threshold = 3 + get_random_u32() % 5; // 随机 3 到 7 次更新一次
+
+    if (++fluctuation_update_counter >= fluctuation_update_threshold) {
         last_fluctuation_factor = fluctuation_min + get_random_u32() % (fluctuation_max - fluctuation_min + 1);
+        fluctuation_update_counter = 0; // 重置计数器
     }
 
-    // 应用随机波动因子
     rate = div_u64(rate * last_fluctuation_factor, 100);
+
+    // 随机短时暂停
+    if (get_random_u32() % 10 < 2) { // 20%的几率触发短暂停
+        u32 random_delay = 1 + get_random_u32() % 5; // 1到5毫秒之间随机延时
+        msleep(random_delay); // 短暂延时
+    }
 
     cwnd = div_u64(rate, MSEC_PER_SEC);
     cwnd *= rtt_ms;
@@ -245,6 +252,7 @@ static void brutal_update_rate(struct sock *sk)
 
     WRITE_ONCE(sk->sk_pacing_rate, min_t(u64, rate, READ_ONCE(sk->sk_max_pacing_rate)));
 }
+
 
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
