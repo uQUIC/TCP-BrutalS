@@ -182,6 +182,26 @@ static inline void brutal_tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
     tp->snd_cwnd = val;
 }
 
+// 定义四种传输模式
+enum transmission_mode {
+    BURST_MODE,         // 高速突发模式
+    STABLE_MODE,        // 平稳传输模式
+    SLOW_GROWTH_MODE,   // 缓慢增长模式
+    JITTER_MODE,        // 抖动模式
+    MODE_COUNT          // 模式计数，用于随机选择模式
+};
+
+// 定义当前的传输模式及持续时间计数器
+static enum transmission_mode current_mode = STABLE_MODE; // 默认平稳模式
+static u32 mode_duration_counter = 0;  // 模式持续计数
+
+// 初始化速率波动因子
+static u32 last_fluctuation_factor = 100;
+
+// 定义最大和最小波动范围
+static u32 fluctuation_min = 90;
+static u32 fluctuation_max = 100;
+
 static void brutal_update_rate(struct sock *sk)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -219,28 +239,49 @@ static void brutal_update_rate(struct sock *sk)
     rate *= 100;
     rate = div_u64(rate, ack_rate);
 
-    // 设置自适应波动幅度
-    u32 fluctuation_min = (ack_rate < 90) ? 60 : 90; // 丢包率高时更大的波动范围
-    u32 fluctuation_max = 100;
+    // 随机切换模式的逻辑：每隔一定时间切换一次传输模式
+    if (++mode_duration_counter >= 100) { // 每100次循环重新选择模式
+        current_mode = get_random_u32() % MODE_COUNT; // 随机选择一种模式
+        mode_duration_counter = 0; // 重置模式持续计数
+    }
 
-    // 变换波动因子更新频率
-    static u32 last_fluctuation_factor = 100;
-    static u32 fluctuation_update_counter = 0;
-    u32 fluctuation_update_threshold = 3 + get_random_u32() % 5; // 随机 3 到 7 次更新一次
+    // 根据当前模式设置速率波动和暂停逻辑
+    switch (current_mode) {
+        case BURST_MODE: // 突发模式：高速传输，波动范围小
+            fluctuation_min = 95;
+            fluctuation_max = 100;
+            break;
 
-    if (++fluctuation_update_counter >= fluctuation_update_threshold) {
+        case STABLE_MODE: // 平稳模式：正常传输速率，波动范围小
+            fluctuation_min = 90;
+            fluctuation_max = 100;
+            break;
+
+        case SLOW_GROWTH_MODE: // 缓慢增长模式：逐步增加传输速率
+            fluctuation_min = 60;
+            fluctuation_max = 80;
+            rate = div_u64(rate * (fluctuation_min + mode_duration_counter), 100); // 随时间增长
+            break;
+
+        case JITTER_MODE: // 抖动模式：传输速率在中等范围内波动，增加随机短暂停
+            fluctuation_min = 80;
+            fluctuation_max = 100;
+            if (get_random_u32() % 10 < 2) { // 20%的概率触发短暂停
+                u32 random_delay = 1 + get_random_u32() % 5; // 随机延迟1到5毫秒
+                msleep(random_delay); // 执行短时延迟
+            }
+            break;
+    }
+
+    // 应用随机波动因子
+    u32 fluctuation_update_threshold = 3 + get_random_u32() % 5; // 每3-7次更新波动因子
+    if (++mode_duration_counter % fluctuation_update_threshold == 0) {
         last_fluctuation_factor = fluctuation_min + get_random_u32() % (fluctuation_max - fluctuation_min + 1);
-        fluctuation_update_counter = 0; // 重置计数器
     }
 
     rate = div_u64(rate * last_fluctuation_factor, 100);
 
-    // 随机短时暂停
-    if (get_random_u32() % 10 < 2) { // 20%的几率触发短暂停
-        u32 random_delay = 1 + get_random_u32() % 5; // 1到5毫秒之间随机延时
-        msleep(random_delay); // 短暂延时
-    }
-
+    // 计算拥塞窗口大小并应用
     cwnd = div_u64(rate, MSEC_PER_SEC);
     cwnd *= rtt_ms;
     cwnd /= mss;
@@ -249,7 +290,6 @@ static void brutal_update_rate(struct sock *sk)
     cwnd = max_t(u32, cwnd, MIN_CWND);
 
     brutal_tcp_snd_cwnd_set(tp, min(cwnd, tp->snd_cwnd_clamp));
-
     WRITE_ONCE(sk->sk_pacing_rate, min_t(u64, rate, READ_ONCE(sk->sk_max_pacing_rate)));
 }
 
