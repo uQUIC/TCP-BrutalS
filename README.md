@@ -1,5 +1,7 @@
 # ![TCP Brutal](logo.png)
 
+使用方法和TCP-Brutal一模一样。就是水一个拥塞控制算法不然不好交差
+
 TCP BrutalS is XLESS's congestion control algorithm ported to TCP, as a Linux kernel module. Information about BrutalS itself can be found in the [Hysteria documentation](https://hysteria.network/docs/advanced/Full-Server-Config/#bandwidth-behavior-explained). As an official subproject of Hysteria, TCP Brutal is actively maintained to be in sync with the Brutal implementation in Hysteria.
 
 **中文文档：[README.zh.md](README.zh.md)**
