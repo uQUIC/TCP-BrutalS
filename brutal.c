@@ -313,4 +313,4 @@ module_exit(brutal_unregister);
 MODULE_AUTHOR("Project Ether");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("TCP BrutalS");
-MODULE_VERSION("0.0.1");
+MODULE_VERSION("0.0.0");
