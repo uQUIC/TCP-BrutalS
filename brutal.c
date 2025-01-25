@@ -310,7 +310,7 @@ static void __exit brutal_unregister(void)
 module_init(brutal_register);
 module_exit(brutal_unregister);
 
-MODULE_AUTHOR("Aperture Internet Laboratory");
+MODULE_AUTHOR("Project Ether");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("TCP Brutal");
-MODULE_VERSION("1.0.2");
+MODULE_DESCRIPTION("TCP BrutalS");
+MODULE_VERSION("0.0.1");
