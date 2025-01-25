@@ -6,7 +6,7 @@
 #if IS_ENABLED(CONFIG_IPV6) && LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
 #include <net/transp_v6.h>
 #else
-#warning IPv6 support is disabled. Brutal will only work with IPv4. \
+#warning IPv6 support is disabled. BrutalS will only work with IPv4. \
  Please ensure you have enabled CONFIG_IPV6 in your kernel config \
  and your kernel version is greater than 5.8.
 #endif
