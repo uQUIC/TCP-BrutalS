@@ -601,6 +601,62 @@ static void brutal_update_rate(struct sock *sk)
         min_t(u64, final_rate, READ_ONCE(sk->sk_max_pacing_rate)));
 }
 
+// TCP-BrutalS 拥塞控制算法初始化
+static void brutal_init(struct sock *sk)
+{
+    struct tcp_sock *tp = tcp_sk(sk);
+    struct brutal *brutal = inet_csk_ca(sk);
+
+    brutal->rate = tp->snd_cwnd * tp->mss_cache * USEC_PER_SEC;
+    brutal->rate = div_u64(brutal->rate, (u64)tp->srtt_us);
+    brutal->cwnd_gain = 10;    // 默认增益为1.0
+
+    // 初始化性能监控
+    pmon.last_update_time = ktime_get_real_ns();
+    pmon.updates_count = 0;
+    pmon.pattern_detections = 0;
+    pmon.mode_switches = 0;
+    pmon.quality_updates = 0;
+
+    // 初始化性能度量缓存
+    memset(&perf, 0, sizeof(struct performance_metrics));
+    perf.last_update = jiffies;
+}
+
+// TCP-BrutalS 拥塞控制算法释放
+static void brutal_release(struct sock *sk)
+{
+    // 清理性能监控数据
+    memset(&pmon, 0, sizeof(struct performance_monitor));
+    
+    // 清理性能度量缓存
+    memset(&perf, 0, sizeof(struct performance_metrics));
+}
+
+// TCP-BrutalS 拥塞控制算法结构
+struct tcp_congestion_ops tcp_brutal_ops = {
+    .flags = TCP_CONG_NON_RESTRICTED,
+    .name = "brutal",
+    .owner = THIS_MODULE,
+    .init = brutal_init,
+    .release = brutal_release,
+    .cong_control = brutal_update_rate,
+    .ssthresh = tcp_reno_ssthresh,
+    .undo_cwnd = tcp_reno_undo_cwnd,
+};
+
+// 模块初始化
+static int __init brutal_register(void)
+{
+    BUILD_BUG_ON(sizeof(struct brutal) > ICSK_CA_PRIV_SIZE);
+    return tcp_register_congestion_control(&tcp_brutal_ops);
+}
+
+// 模块清理
+static void __exit brutal_unregister(void)
+{
+    tcp_unregister_congestion_control(&tcp_brutal_ops);
+}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
 static void brutal_main(struct sock *sk, u32 ack, int flag, const struct rate_sample *rs)
@@ -685,4 +741,4 @@ module_exit(brutal_unregister);
 MODULE_AUTHOR("Project Ether");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("TCP BrutalS");
-MODULE_VERSION("0.1.3");
+MODULE_VERSION("0.1.4");
