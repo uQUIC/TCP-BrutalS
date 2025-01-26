@@ -182,6 +182,16 @@ static inline void brutal_tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
     tp->snd_cwnd = val;
 }
 
+// 定义网络质量等级
+#define NETWORK_QUALITY_EXCELLENT 90
+#define NETWORK_QUALITY_GOOD     80
+#define NETWORK_QUALITY_FAIR     70
+#define NETWORK_QUALITY_POOR     60
+
+// 定义RTT阈值（微秒）
+#define RTT_THRESHOLD_LOW    50000   // 50ms
+#define RTT_THRESHOLD_HIGH   200000  // 200ms
+
 enum transmission_mode {
     BURST_MODE,         // 高速突发模式
     STABLE_MODE,        // 平稳传输模式
@@ -190,12 +200,73 @@ enum transmission_mode {
     MODE_COUNT          // 模式计数，用于随机选择模式
 };
 
-// 定义当前的传输模式及持续时间计数器
+// 自适应控制结构
+struct adaptive_control {
+    u32 network_quality;    // 网络质量评分 (0-100)
+    u32 last_rtt;          // 上次的RTT
+    u32 rtt_min;           // 最小RTT
+    u32 rtt_max;           // 最大RTT
+    u32 loss_count;        // 连续丢包计数
+    u32 ack_count;         // 连续确认计数
+    u32 quality_samples;   // 样本数量
+};
+
+// 定义当前的传输模式及控制变量
 static enum transmission_mode current_mode = STABLE_MODE;
 static u32 mode_duration_counter = 0;
 static u32 last_fluctuation_factor = 100;
-static u32 fluctuation_min = 95;      // 改为95（原来是90，减少波动范围）
-static u32 fluctuation_max = 100;     // 保持不变
+static u32 fluctuation_min = 95;
+static u32 fluctuation_max = 100;
+static struct adaptive_control ac = {
+    .network_quality = 80,
+    .last_rtt = 0,
+    .rtt_min = U32_MAX,
+    .rtt_max = 0,
+    .loss_count = 0,
+    .ack_count = 0,
+    .quality_samples = 0,
+};
+
+// 更新网络质量评分
+static void update_network_quality(struct adaptive_control *ac, 
+                                 u32 rtt_us, u32 acked, u32 losses) {
+    // 更新RTT统计
+    ac->last_rtt = rtt_us;
+    ac->rtt_min = min(ac->rtt_min, rtt_us);
+    ac->rtt_max = max(ac->rtt_max, rtt_us);
+
+    // 计算RTT得分 (0-40分)
+    u32 rtt_score;
+    if (rtt_us <= RTT_THRESHOLD_LOW)
+        rtt_score = 40;
+    else if (rtt_us >= RTT_THRESHOLD_HIGH)
+        rtt_score = 10;
+    else
+        rtt_score = 40 - ((rtt_us - RTT_THRESHOLD_LOW) * 30) / 
+                        (RTT_THRESHOLD_HIGH - RTT_THRESHOLD_LOW);
+
+    // 计算丢包率得分 (0-40分)
+    u32 loss_score;
+    if (acked + losses == 0)
+        loss_score = 40;
+    else
+        loss_score = 40 * acked / (acked + losses);
+
+    // 计算稳定性得分 (0-20分)
+    u32 stability_score;
+    u32 rtt_variance = ac->rtt_max - ac->rtt_min;
+    if (rtt_variance < RTT_THRESHOLD_LOW)
+        stability_score = 20;
+    else if (rtt_variance >= RTT_THRESHOLD_HIGH)
+        stability_score = 5;
+    else
+        stability_score = 20 - ((rtt_variance - RTT_THRESHOLD_LOW) * 15) /
+                              (RTT_THRESHOLD_HIGH - RTT_THRESHOLD_LOW);
+
+    // 更新总体网络质量评分
+    ac->network_quality = rtt_score + loss_score + stability_score;
+    ac->quality_samples++;
+}
 
 // 计算基础速率 f(x)
 static u64 calculate_base_rate(struct brutal *brutal, u32 acked, u32 losses)
@@ -212,49 +283,66 @@ static u64 calculate_base_rate(struct brutal *brutal, u32 acked, u32 losses)
     }
 
     base_rate *= 100;
-    return div_u64(base_rate, ack_rate); // 这就是f(x)
+    return div_u64(base_rate, ack_rate);
+}
+
+// 基于网络质量自适应调整波动范围
+static void adapt_fluctuation_range(struct adaptive_control *ac) {
+    if (ac->network_quality >= NETWORK_QUALITY_EXCELLENT) {
+        fluctuation_min = 98;
+        fluctuation_max = 100;
+    } else if (ac->network_quality >= NETWORK_QUALITY_GOOD) {
+        fluctuation_min = 95;
+        fluctuation_max = 100;
+    } else if (ac->network_quality >= NETWORK_QUALITY_FAIR) {
+        fluctuation_min = 85;
+        fluctuation_max = 95;
+    } else {
+        fluctuation_min = 80;
+        fluctuation_max = 90;
+    }
 }
 
 // 应用模式调制，实现g(f(x))
-static u64 apply_mode_modulation(u64 base_rate)
+static u64 apply_mode_modulation(u64 base_rate, struct adaptive_control *ac)
 {
-    // 模式切换逻辑
     if (++mode_duration_counter >= 100) {
-        current_mode = get_random_u32() % MODE_COUNT;
+        // 基于网络质量智能选择模式
+        if (ac->network_quality >= NETWORK_QUALITY_EXCELLENT)
+            current_mode = BURST_MODE;
+        else if (ac->network_quality >= NETWORK_QUALITY_GOOD)
+            current_mode = STABLE_MODE;
+        else if (ac->network_quality >= NETWORK_QUALITY_FAIR)
+            current_mode = SLOW_GROWTH_MODE;
+        else
+            current_mode = JITTER_MODE;
+
         mode_duration_counter = 0;
-        // 重置波动因子
         last_fluctuation_factor = 100;
     }
 
-    // 基于当前时间的种子值
     u32 time_seed = (u32)ktime_get_seconds() ^ (mode_duration_counter << 16);
     
-    // 根据模式应用调制
+    // 应用自适应调整
+    adapt_fluctuation_range(ac);
+
     switch (current_mode) {
         case BURST_MODE:
-            fluctuation_min = 98;      // 改为98（原来是95，减少波动范围）
-            fluctuation_max = 100;     // 保持不变
+            fluctuation_min = max(fluctuation_min, 98);
             break;
             
         case STABLE_MODE:
-            fluctuation_min = 95;      // 改为95（原来是90，减少波动范围）
-            fluctuation_max = 100;     // 保持不变
+            fluctuation_min = max(fluctuation_min, 95);
             break;
             
         case SLOW_GROWTH_MODE:
-            fluctuation_min = 70;      // 改为70（原来是60，减少波动范围）
-            fluctuation_max = 80;      // 保持不变
-            // 使用余弦函数模拟平滑增长
             base_rate = div_u64(base_rate * 
-                (fluctuation_min + mode_duration_counter % 10), 100);  // 改为%10（原来是%20）
+                (fluctuation_min + mode_duration_counter % 10), 100);
             break;
             
         case JITTER_MODE:
-            fluctuation_min = 90;      // 改为90（原来是80，减少波动范围）
-            fluctuation_max = 100;     // 保持不变
-            // 引入基于时间的抖动
-            if ((time_seed & 0xF) < 3) { // 约20%概率
-                u32 jitter = 1 + (time_seed % 3);  // 改为%3（原来是%5，减少抖动范围）
+            if ((time_seed & 0xF) < 3) {
+                u32 jitter = 1 + (time_seed % 3);
                 msleep(jitter);
             }
             break;
@@ -267,10 +355,10 @@ static u64 apply_mode_modulation(u64 base_rate)
         last_fluctuation_factor = fluctuation_min + (time_seed % range);
     }
 
-    // 应用最终波动
     return div_u64(base_rate * last_fluctuation_factor, 100);
 }
 
+// 更新速率主函数
 static void brutal_update_rate(struct sock *sk)
 {
     struct tcp_sock *tp = tcp_sk(sk);
@@ -294,11 +382,14 @@ static void brutal_update_rate(struct sock *sk)
         }
     }
 
+    // 更新网络质量评分
+    update_network_quality(&ac, tp->srtt_us, acked, losses);
+    
     // 计算f(x)
     u64 base_rate = calculate_base_rate(brutal, acked, losses);
     
     // 应用g(f(x))
-    u64 final_rate = apply_mode_modulation(base_rate);
+    u64 final_rate = apply_mode_modulation(base_rate, &ac);
 
     // 计算并设置拥塞窗口
     cwnd = div_u64(final_rate, MSEC_PER_SEC);
@@ -313,7 +404,6 @@ static void brutal_update_rate(struct sock *sk)
     WRITE_ONCE(sk->sk_pacing_rate, 
         min_t(u64, final_rate, READ_ONCE(sk->sk_max_pacing_rate)));
 }
-
 
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 10, 0)
