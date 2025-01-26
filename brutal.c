@@ -182,7 +182,6 @@ static inline void brutal_tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
     tp->snd_cwnd = val;
 }
 
-// 定义四种传输模式
 enum transmission_mode {
     BURST_MODE,         // 高速突发模式
     STABLE_MODE,        // 平稳传输模式
@@ -192,15 +191,85 @@ enum transmission_mode {
 };
 
 // 定义当前的传输模式及持续时间计数器
-static enum transmission_mode current_mode = STABLE_MODE; // 默认平稳模式
-static u32 mode_duration_counter = 0;  // 模式持续计数
-
-// 初始化速率波动因子
+static enum transmission_mode current_mode = STABLE_MODE;
+static u32 mode_duration_counter = 0;
 static u32 last_fluctuation_factor = 100;
-
-// 定义最大和最小波动范围
 static u32 fluctuation_min = 90;
 static u32 fluctuation_max = 100;
+
+// 计算基础速率 f(x)
+static u64 calculate_base_rate(struct brutal *brutal, u32 acked, u32 losses)
+{
+    u32 ack_rate;
+    u64 base_rate = brutal->rate;
+
+    if (acked + losses < MIN_PKT_INFO_SAMPLES)
+        ack_rate = 100;
+    else {
+        ack_rate = acked * 100 / (acked + losses);
+        if (ack_rate < MIN_ACK_RATE_PERCENT)
+            ack_rate = MIN_ACK_RATE_PERCENT;
+    }
+
+    base_rate *= 100;
+    return div_u64(base_rate, ack_rate); // 这就是f(x)
+}
+
+// 应用模式调制，实现g(f(x))
+static u64 apply_mode_modulation(u64 base_rate)
+{
+    // 模式切换逻辑
+    if (++mode_duration_counter >= 100) {
+        current_mode = get_random_u32() % MODE_COUNT;
+        mode_duration_counter = 0;
+        // 重置波动因子
+        last_fluctuation_factor = 100;
+    }
+
+    // 基于当前时间的种子值
+    u32 time_seed = (u32)ktime_get_seconds() ^ (mode_duration_counter << 16);
+    
+    // 根据模式应用调制
+    switch (current_mode) {
+        case BURST_MODE:
+            fluctuation_min = 95;
+            fluctuation_max = 100;
+            break;
+            
+        case STABLE_MODE:
+            fluctuation_min = 90;
+            fluctuation_max = 100;
+            break;
+            
+        case SLOW_GROWTH_MODE:
+            fluctuation_min = 60;
+            fluctuation_max = 80;
+            // 使用余弦函数模拟平滑增长
+            base_rate = div_u64(base_rate * 
+                (fluctuation_min + mode_duration_counter % 20), 100);
+            break;
+            
+        case JITTER_MODE:
+            fluctuation_min = 80;
+            fluctuation_max = 100;
+            // 引入基于时间的抖动
+            if ((time_seed & 0xF) < 3) { // 约20%概率
+                u32 jitter = 1 + (time_seed % 5);
+                msleep(jitter);
+            }
+            break;
+    }
+
+    // 更新波动因子
+    u32 update_threshold = 3 + (time_seed % 5);
+    if (mode_duration_counter % update_threshold == 0) {
+        u32 range = fluctuation_max - fluctuation_min + 1;
+        last_fluctuation_factor = fluctuation_min + (time_seed % range);
+    }
+
+    // 应用最终波动
+    return div_u64(base_rate * last_fluctuation_factor, 100);
+}
 
 static void brutal_update_rate(struct sock *sk)
 {
@@ -210,8 +279,6 @@ static void brutal_update_rate(struct sock *sk)
     u64 sec = tcp_sock_get_sec(tp);
     u64 min_sec = sec - PKT_INFO_SLOTS;
     u32 acked = 0, losses = 0;
-    u32 ack_rate; // Scaled by 100 (100=1.00) as kernel doesn't support float
-    u64 rate = brutal->rate;
     u32 cwnd;
 
     u32 mss = tp->mss_cache;
@@ -219,78 +286,32 @@ static void brutal_update_rate(struct sock *sk)
     if (!rtt_ms)
         rtt_ms = 1;
 
-    for (int i = 0; i < PKT_INFO_SLOTS; i++)
-    {
-        if (brutal->slots[i].sec >= min_sec)
-        {
+    // 统计确认和丢失的数据包
+    for (int i = 0; i < PKT_INFO_SLOTS; i++) {
+        if (brutal->slots[i].sec >= min_sec) {
             acked += brutal->slots[i].acked;
             losses += brutal->slots[i].losses;
         }
     }
-    if (acked + losses < MIN_PKT_INFO_SAMPLES)
-        ack_rate = 100;
-    else
-    {
-        ack_rate = acked * 100 / (acked + losses);
-        if (ack_rate < MIN_ACK_RATE_PERCENT)
-            ack_rate = MIN_ACK_RATE_PERCENT;
-    }
 
-    rate *= 100;
-    rate = div_u64(rate, ack_rate);
+    // 计算f(x)
+    u64 base_rate = calculate_base_rate(brutal, acked, losses);
+    
+    // 应用g(f(x))
+    u64 final_rate = apply_mode_modulation(base_rate);
 
-    // 随机切换模式的逻辑：每隔一定时间切换一次传输模式
-    if (++mode_duration_counter >= 100) { // 每100次循环重新选择模式
-        current_mode = get_random_u32() % MODE_COUNT; // 随机选择一种模式
-        mode_duration_counter = 0; // 重置模式持续计数
-    }
-
-    // 根据当前模式设置速率波动和暂停逻辑
-    switch (current_mode) {
-        case BURST_MODE: // 突发模式：高速传输，波动范围小
-            fluctuation_min = 95;
-            fluctuation_max = 100;
-            break;
-
-        case STABLE_MODE: // 平稳模式：正常传输速率，波动范围小
-            fluctuation_min = 90;
-            fluctuation_max = 100;
-            break;
-
-        case SLOW_GROWTH_MODE: // 缓慢增长模式：逐步增加传输速率
-            fluctuation_min = 60;
-            fluctuation_max = 80;
-            rate = div_u64(rate * (fluctuation_min + mode_duration_counter), 100); // 随时间增长
-            break;
-
-        case JITTER_MODE: // 抖动模式：传输速率在中等范围内波动，增加随机短暂停
-            fluctuation_min = 80;
-            fluctuation_max = 100;
-            if (get_random_u32() % 10 < 2) { // 20%的概率触发短暂停
-                u32 random_delay = 1 + get_random_u32() % 5; // 随机延迟1到5毫秒
-                msleep(random_delay); // 执行短时延迟
-            }
-            break;
-    }
-
-    // 应用随机波动因子
-    u32 fluctuation_update_threshold = 3 + get_random_u32() % 5; // 每3-7次更新波动因子
-    if (++mode_duration_counter % fluctuation_update_threshold == 0) {
-        last_fluctuation_factor = fluctuation_min + get_random_u32() % (fluctuation_max - fluctuation_min + 1);
-    }
-
-    rate = div_u64(rate * last_fluctuation_factor, 100);
-
-    // 计算拥塞窗口大小并应用
-    cwnd = div_u64(rate, MSEC_PER_SEC);
+    // 计算并设置拥塞窗口
+    cwnd = div_u64(final_rate, MSEC_PER_SEC);
     cwnd *= rtt_ms;
     cwnd /= mss;
     cwnd *= brutal->cwnd_gain;
     cwnd /= 10;
     cwnd = max_t(u32, cwnd, MIN_CWND);
 
+    // 应用最终结果
     brutal_tcp_snd_cwnd_set(tp, min(cwnd, tp->snd_cwnd_clamp));
-    WRITE_ONCE(sk->sk_pacing_rate, min_t(u64, rate, READ_ONCE(sk->sk_max_pacing_rate)));
+    WRITE_ONCE(sk->sk_pacing_rate, 
+        min_t(u64, final_rate, READ_ONCE(sk->sk_max_pacing_rate)));
 }
 
 
@@ -378,4 +399,4 @@ module_exit(brutal_unregister);
 MODULE_AUTHOR("Project Ether");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("TCP BrutalS");
-MODULE_VERSION("0.0.1");
+MODULE_VERSION("0.0.2");
