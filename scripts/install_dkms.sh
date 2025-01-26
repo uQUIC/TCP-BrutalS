@@ -3,8 +3,8 @@
 # install_dkms.sh - tcp-brutals dkms module install script
 # Try `install_dkms.sh --help` for usage.
 #
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2023 Aperture Internet Laboratory
+# SPDX-License-Identifier: Private
+# Copyright (c) 2025-present Project Ether
 #
 
 set -e
