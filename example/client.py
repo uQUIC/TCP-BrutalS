@@ -42,7 +42,7 @@ def main(host, port, buf_size, rate_mbps):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="TCP Brutal example client")
+    parser = argparse.ArgumentParser(description="TCP BrutalS example client")
     parser.add_argument("host", help="Server host", type=str)
     parser.add_argument("rate_mbps", help="Rate in Mbps", type=int)
     parser.add_argument(
