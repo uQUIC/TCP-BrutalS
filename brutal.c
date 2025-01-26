@@ -192,6 +192,13 @@ static inline void brutal_tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
 #define RTT_THRESHOLD_LOW    50000   // 50ms
 #define RTT_THRESHOLD_HIGH   200000  // 200ms
 
+// 反检测相关定义
+#define PATTERN_HISTORY_SIZE 16
+#define NOISE_MIN           97    // 最小噪声系数
+#define NOISE_MAX          103    // 最大噪声系数
+#define PATTERN_THRESHOLD    5    // 模式检测阈值
+#define TIME_VARIATION_MAX  50    // 最大时间变异(ms)
+
 enum transmission_mode {
     BURST_MODE,         // 高速突发模式
     STABLE_MODE,        // 平稳传输模式
@@ -211,12 +218,24 @@ struct adaptive_control {
     u32 quality_samples;   // 样本数量
 };
 
+// 反检测控制结构
+struct anti_detection {
+    u64 rate_history[PATTERN_HISTORY_SIZE];  // 速率历史
+    u32 rate_index;                          // 当前速率索引
+    u32 pattern_count;                       // 模式重复计数
+    u32 last_adjustment_time;                // 上次调整时间
+    u32 entropy_pool[4];                     // 熵池
+    bool pattern_detected;                    // 模式检测标志
+};
+
 // 定义当前的传输模式及控制变量
 static enum transmission_mode current_mode = STABLE_MODE;
 static u32 mode_duration_counter = 0;
 static u32 last_fluctuation_factor = 100;
 static u32 fluctuation_min = 95;
 static u32 fluctuation_max = 100;
+
+// 初始化控制结构
 static struct adaptive_control ac = {
     .network_quality = 80,
     .last_rtt = 0,
@@ -227,15 +246,87 @@ static struct adaptive_control ac = {
     .quality_samples = 0,
 };
 
+static struct anti_detection ad = {
+    .rate_index = 0,
+    .pattern_count = 0,
+    .last_adjustment_time = 0,
+    .pattern_detected = false,
+};
+
+// 更新熵池
+static void update_entropy_pool(struct anti_detection *ad) {
+    u32 time = (u32)ktime_get_real_seconds();
+    u32 jiffies_val = jiffies;
+    
+    ad->entropy_pool[0] ^= time;
+    ad->entropy_pool[1] ^= jiffies_val;
+    ad->entropy_pool[2] ^= (time << 16) | (time >> 16);
+    ad->entropy_pool[3] ^= (jiffies_val << 16) | (jiffies_val >> 16);
+}
+
+// 生成随机噪声
+static u32 generate_noise(struct anti_detection *ad) {
+    update_entropy_pool(ad);
+    u32 random_val = ad->entropy_pool[0] ^ ad->entropy_pool[1] ^ 
+                    ad->entropy_pool[2] ^ ad->entropy_pool[3];
+    return NOISE_MIN + (random_val % (NOISE_MAX - NOISE_MIN + 1));
+}
+
+// 检测模式
+static bool detect_pattern(struct anti_detection *ad, u64 current_rate) {
+    int i, count = 0;
+    ad->rate_history[ad->rate_index] = current_rate;
+    ad->rate_index = (ad->rate_index + 1) % PATTERN_HISTORY_SIZE;
+
+    // 检查连续相似的速率
+    for (i = 1; i < PATTERN_HISTORY_SIZE; i++) {
+        u64 prev = ad->rate_history[i-1];
+        u64 curr = ad->rate_history[i];
+        if (prev && curr && abs(prev - curr) < (prev / 20))
+            count++;
+    }
+
+    return count >= PATTERN_THRESHOLD;
+}
+
+// 应用反检测措施
+static u64 apply_anti_detection(u64 rate, struct anti_detection *ad) {
+    u32 noise;
+    u32 current_time = jiffies_to_msecs(jiffies);
+    
+    if (detect_pattern(ad, rate)) {
+        ad->pattern_count++;
+        ad->pattern_detected = true;
+    } else {
+        ad->pattern_count = 0;
+        ad->pattern_detected = false;
+    }
+
+    // 根据检测结果应用不同程度的随机化
+    if (ad->pattern_detected) {
+        noise = generate_noise(ad);
+        rate = div_u64(rate * noise, 100);
+        
+        if (current_time - ad->last_adjustment_time > TIME_VARIATION_MAX) {
+            u32 delay = generate_noise(ad) % TIME_VARIATION_MAX;
+            msleep(delay);
+            ad->last_adjustment_time = current_time;
+        }
+    } else {
+        noise = NOISE_MIN + (generate_noise(ad) % ((NOISE_MAX - NOISE_MIN) / 2));
+        rate = div_u64(rate * noise, 100);
+    }
+
+    return rate;
+}
+
 // 更新网络质量评分
 static void update_network_quality(struct adaptive_control *ac, 
                                  u32 rtt_us, u32 acked, u32 losses) {
-    // 更新RTT统计
     ac->last_rtt = rtt_us;
     ac->rtt_min = min(ac->rtt_min, rtt_us);
     ac->rtt_max = max(ac->rtt_max, rtt_us);
 
-    // 计算RTT得分 (0-40分)
     u32 rtt_score;
     if (rtt_us <= RTT_THRESHOLD_LOW)
         rtt_score = 40;
@@ -245,14 +336,12 @@ static void update_network_quality(struct adaptive_control *ac,
         rtt_score = 40 - ((rtt_us - RTT_THRESHOLD_LOW) * 30) / 
                         (RTT_THRESHOLD_HIGH - RTT_THRESHOLD_LOW);
 
-    // 计算丢包率得分 (0-40分)
     u32 loss_score;
     if (acked + losses == 0)
         loss_score = 40;
     else
         loss_score = 40 * acked / (acked + losses);
 
-    // 计算稳定性得分 (0-20分)
     u32 stability_score;
     u32 rtt_variance = ac->rtt_max - ac->rtt_min;
     if (rtt_variance < RTT_THRESHOLD_LOW)
@@ -263,7 +352,6 @@ static void update_network_quality(struct adaptive_control *ac,
         stability_score = 20 - ((rtt_variance - RTT_THRESHOLD_LOW) * 15) /
                               (RTT_THRESHOLD_HIGH - RTT_THRESHOLD_LOW);
 
-    // 更新总体网络质量评分
     ac->network_quality = rtt_score + loss_score + stability_score;
     ac->quality_samples++;
 }
@@ -307,7 +395,6 @@ static void adapt_fluctuation_range(struct adaptive_control *ac) {
 static u64 apply_mode_modulation(u64 base_rate, struct adaptive_control *ac)
 {
     if (++mode_duration_counter >= 100) {
-        // 基于网络质量智能选择模式
         if (ac->network_quality >= NETWORK_QUALITY_EXCELLENT)
             current_mode = BURST_MODE;
         else if (ac->network_quality >= NETWORK_QUALITY_GOOD)
@@ -322,8 +409,6 @@ static u64 apply_mode_modulation(u64 base_rate, struct adaptive_control *ac)
     }
 
     u32 time_seed = (u32)ktime_get_seconds() ^ (mode_duration_counter << 16);
-    
-    // 应用自适应调整
     adapt_fluctuation_range(ac);
 
     switch (current_mode) {
@@ -348,12 +433,14 @@ static u64 apply_mode_modulation(u64 base_rate, struct adaptive_control *ac)
             break;
     }
 
-    // 更新波动因子
     u32 update_threshold = 3 + (time_seed % 5);
     if (mode_duration_counter % update_threshold == 0) {
         u32 range = fluctuation_max - fluctuation_min + 1;
         last_fluctuation_factor = fluctuation_min + (time_seed % range);
     }
+
+    // 应用反检测措施
+    base_rate = apply_anti_detection(base_rate, &ad);
 
     return div_u64(base_rate * last_fluctuation_factor, 100);
 }
@@ -374,7 +461,6 @@ static void brutal_update_rate(struct sock *sk)
     if (!rtt_ms)
         rtt_ms = 1;
 
-    // 统计确认和丢失的数据包
     for (int i = 0; i < PKT_INFO_SLOTS; i++) {
         if (brutal->slots[i].sec >= min_sec) {
             acked += brutal->slots[i].acked;
@@ -382,16 +468,11 @@ static void brutal_update_rate(struct sock *sk)
         }
     }
 
-    // 更新网络质量评分
     update_network_quality(&ac, tp->srtt_us, acked, losses);
     
-    // 计算f(x)
     u64 base_rate = calculate_base_rate(brutal, acked, losses);
-    
-    // 应用g(f(x))
     u64 final_rate = apply_mode_modulation(base_rate, &ac);
 
-    // 计算并设置拥塞窗口
     cwnd = div_u64(final_rate, MSEC_PER_SEC);
     cwnd *= rtt_ms;
     cwnd /= mss;
@@ -399,7 +480,6 @@ static void brutal_update_rate(struct sock *sk)
     cwnd /= 10;
     cwnd = max_t(u32, cwnd, MIN_CWND);
 
-    // 应用最终结果
     brutal_tcp_snd_cwnd_set(tp, min(cwnd, tp->snd_cwnd_clamp));
     WRITE_ONCE(sk->sk_pacing_rate, 
         min_t(u64, final_rate, READ_ONCE(sk->sk_max_pacing_rate)));
