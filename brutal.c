@@ -182,6 +182,14 @@ static inline void brutal_tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
     tp->snd_cwnd = val;
 }
 
+/*
+ * TCP-BrutalS - TCP Congestion Control
+ * Version: v0.1.3
+ * Last Update: 2025-01-26 06:49:10 UTC
+ * Author: v2eth
+ * Maintainer: X2ET
+ */
+
 // 定义网络质量等级
 #define NETWORK_QUALITY_EXCELLENT 90
 #define NETWORK_QUALITY_GOOD     80
@@ -198,6 +206,12 @@ static inline void brutal_tcp_snd_cwnd_set(struct tcp_sock *tp, u32 val)
 #define NOISE_MAX          103    // 最大噪声系数
 #define PATTERN_THRESHOLD    5    // 模式检测阈值
 #define TIME_VARIATION_MAX  50    // 最大时间变异(ms)
+
+// 性能优化相关定义
+#define PERF_CACHE_SIZE     64    // 性能缓存大小
+#define RTT_HISTORY_SIZE    32    // RTT历史大小
+#define RATE_HISTORY_SIZE   32    // 速率历史大小
+#define PERF_UPDATE_INTERVAL 1000 // 性能更新间隔(ms)
 
 enum transmission_mode {
     BURST_MODE,         // 高速突发模式
@@ -228,6 +242,18 @@ struct anti_detection {
     bool pattern_detected;                    // 模式检测标志
 };
 
+// 性能优化结构
+struct performance_metrics {
+    u64 rate_history[RATE_HISTORY_SIZE];     // 速率历史
+    u32 rtt_history[RTT_HISTORY_SIZE];       // RTT历史
+    u32 rate_index;                          // 速率历史索引
+    u32 rtt_index;                           // RTT历史索引
+    u64 total_rate;                          // 总速率
+    u32 total_rtt;                           // 总RTT
+    u32 sample_count;                        // 样本数
+    u32 last_update;                         // 上次更新时间
+};
+
 // 定义当前的传输模式及控制变量
 static enum transmission_mode current_mode = STABLE_MODE;
 static u32 mode_duration_counter = 0;
@@ -252,6 +278,51 @@ static struct anti_detection ad = {
     .last_adjustment_time = 0,
     .pattern_detected = false,
 };
+
+static struct performance_metrics perf = {
+    .rate_index = 0,
+    .rtt_index = 0,
+    .total_rate = 0,
+    .total_rtt = 0,
+    .sample_count = 0,
+    .last_update = 0,
+};
+
+// 性能优化：速率计算缓存
+static inline u64 get_cached_rate(u64 rate) {
+    u32 index = perf.rate_index % RATE_HISTORY_SIZE;
+    perf.rate_history[index] = rate;
+    perf.total_rate += rate;
+    perf.rate_index++;
+    
+    if (perf.rate_index >= RATE_HISTORY_SIZE) {
+        perf.total_rate = 0;
+        for (int i = 0; i < RATE_HISTORY_SIZE; i++) {
+            perf.total_rate += perf.rate_history[i];
+        }
+        perf.rate_index = 0;
+    }
+    
+    return perf.total_rate / min(perf.rate_index, RATE_HISTORY_SIZE);
+}
+
+// 性能优化：RTT计算缓存
+static inline u32 get_cached_rtt(u32 rtt) {
+    u32 index = perf.rtt_index % RTT_HISTORY_SIZE;
+    perf.rtt_history[index] = rtt;
+    perf.total_rtt += rtt;
+    perf.rtt_index++;
+    
+    if (perf.rtt_index >= RTT_HISTORY_SIZE) {
+        perf.total_rtt = 0;
+        for (int i = 0; i < RTT_HISTORY_SIZE; i++) {
+            perf.total_rtt += perf.rtt_history[i];
+        }
+        perf.rtt_index = 0;
+    }
+    
+    return perf.total_rtt / min(perf.rtt_index, RTT_HISTORY_SIZE);
+}
 
 // 更新熵池
 static void update_entropy_pool(struct anti_detection *ad) {
@@ -323,17 +394,20 @@ static u64 apply_anti_detection(u64 rate, struct anti_detection *ad) {
 // 更新网络质量评分
 static void update_network_quality(struct adaptive_control *ac, 
                                  u32 rtt_us, u32 acked, u32 losses) {
-    ac->last_rtt = rtt_us;
-    ac->rtt_min = min(ac->rtt_min, rtt_us);
-    ac->rtt_max = max(ac->rtt_max, rtt_us);
+    // 应用性能优化的RTT计算
+    u32 cached_rtt = get_cached_rtt(rtt_us);
+    
+    ac->last_rtt = cached_rtt;
+    ac->rtt_min = min(ac->rtt_min, cached_rtt);
+    ac->rtt_max = max(ac->rtt_max, cached_rtt);
 
     u32 rtt_score;
-    if (rtt_us <= RTT_THRESHOLD_LOW)
+    if (cached_rtt <= RTT_THRESHOLD_LOW)
         rtt_score = 40;
-    else if (rtt_us >= RTT_THRESHOLD_HIGH)
+    else if (cached_rtt >= RTT_THRESHOLD_HIGH)
         rtt_score = 10;
     else
-        rtt_score = 40 - ((rtt_us - RTT_THRESHOLD_LOW) * 30) / 
+        rtt_score = 40 - ((cached_rtt - RTT_THRESHOLD_LOW) * 30) / 
                         (RTT_THRESHOLD_HIGH - RTT_THRESHOLD_LOW);
 
     u32 loss_score;
@@ -439,10 +513,42 @@ static u64 apply_mode_modulation(u64 base_rate, struct adaptive_control *ac)
         last_fluctuation_factor = fluctuation_min + (time_seed % range);
     }
 
-    // 应用反检测措施
+    // 应用反检测措施并进行性能优化
     base_rate = apply_anti_detection(base_rate, &ad);
+    base_rate = get_cached_rate(base_rate);
 
     return div_u64(base_rate * last_fluctuation_factor, 100);
+}
+
+// 性能监控结构
+struct performance_monitor {
+    u64 last_update_time;      // 上次更新时间
+    u32 updates_count;         // 更新计数
+    u32 pattern_detections;    // 模式检测次数
+    u32 mode_switches;         // 模式切换次数
+    u32 quality_updates;       // 质量更新次数
+};
+
+static struct performance_monitor pmon = {
+    .last_update_time = 0,
+    .updates_count = 0,
+    .pattern_detections = 0,
+    .mode_switches = 0,
+    .quality_updates = 0,
+};
+
+// 更新性能监控
+static inline void update_performance_monitor(void) {
+    u64 current_time = ktime_get_real_ns();
+    pmon.updates_count++;
+    
+    if (current_time - pmon.last_update_time >= NSEC_PER_SEC) {
+        pmon.last_update_time = current_time;
+        pmon.updates_count = 0;
+        pmon.pattern_detections = 0;
+        pmon.mode_switches = 0;
+        pmon.quality_updates = 0;
+    }
 }
 
 // 更新速率主函数
@@ -468,11 +574,20 @@ static void brutal_update_rate(struct sock *sk)
         }
     }
 
+    // 更新性能监控
+    update_performance_monitor();
+    pmon.quality_updates++;
+
+    // 更新网络质量
     update_network_quality(&ac, tp->srtt_us, acked, losses);
     
+    // 计算基础速率
     u64 base_rate = calculate_base_rate(brutal, acked, losses);
+    
+    // 应用模式调制
     u64 final_rate = apply_mode_modulation(base_rate, &ac);
 
+    // 计算拥塞窗口
     cwnd = div_u64(final_rate, MSEC_PER_SEC);
     cwnd *= rtt_ms;
     cwnd /= mss;
@@ -480,6 +595,7 @@ static void brutal_update_rate(struct sock *sk)
     cwnd /= 10;
     cwnd = max_t(u32, cwnd, MIN_CWND);
 
+    // 设置拥塞窗口和速率
     brutal_tcp_snd_cwnd_set(tp, min(cwnd, tp->snd_cwnd_clamp));
     WRITE_ONCE(sk->sk_pacing_rate, 
         min_t(u64, final_rate, READ_ONCE(sk->sk_max_pacing_rate)));
@@ -569,4 +685,4 @@ module_exit(brutal_unregister);
 MODULE_AUTHOR("Project Ether");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("TCP BrutalS");
-MODULE_VERSION("0.0.2");
+MODULE_VERSION("0.1.3");
