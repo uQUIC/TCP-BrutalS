@@ -194,8 +194,8 @@ enum transmission_mode {
 static enum transmission_mode current_mode = STABLE_MODE;
 static u32 mode_duration_counter = 0;
 static u32 last_fluctuation_factor = 100;
-static u32 fluctuation_min = 90;
-static u32 fluctuation_max = 100;
+static u32 fluctuation_min = 95;      // 改为95（原来是90，减少波动范围）
+static u32 fluctuation_max = 100;     // 保持不变
 
 // 计算基础速率 f(x)
 static u64 calculate_base_rate(struct brutal *brutal, u32 acked, u32 losses)
@@ -232,29 +232,29 @@ static u64 apply_mode_modulation(u64 base_rate)
     // 根据模式应用调制
     switch (current_mode) {
         case BURST_MODE:
-            fluctuation_min = 95;
-            fluctuation_max = 100;
+            fluctuation_min = 98;      // 改为98（原来是95，减少波动范围）
+            fluctuation_max = 100;     // 保持不变
             break;
             
         case STABLE_MODE:
-            fluctuation_min = 90;
-            fluctuation_max = 100;
+            fluctuation_min = 95;      // 改为95（原来是90，减少波动范围）
+            fluctuation_max = 100;     // 保持不变
             break;
             
         case SLOW_GROWTH_MODE:
-            fluctuation_min = 60;
-            fluctuation_max = 80;
+            fluctuation_min = 70;      // 改为70（原来是60，减少波动范围）
+            fluctuation_max = 80;      // 保持不变
             // 使用余弦函数模拟平滑增长
             base_rate = div_u64(base_rate * 
-                (fluctuation_min + mode_duration_counter % 20), 100);
+                (fluctuation_min + mode_duration_counter % 10), 100);  // 改为%10（原来是%20）
             break;
             
         case JITTER_MODE:
-            fluctuation_min = 80;
-            fluctuation_max = 100;
+            fluctuation_min = 90;      // 改为90（原来是80，减少波动范围）
+            fluctuation_max = 100;     // 保持不变
             // 引入基于时间的抖动
             if ((time_seed & 0xF) < 3) { // 约20%概率
-                u32 jitter = 1 + (time_seed % 5);
+                u32 jitter = 1 + (time_seed % 3);  // 改为%3（原来是%5，减少抖动范围）
                 msleep(jitter);
             }
             break;
