@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install_dkms.sh - tcp-brutal dkms module install script
+# install_dkms.sh - tcp-brutals dkms module install script
 # Try `install_dkms.sh --help` for usage.
 #
 # SPDX-License-Identifier: MIT
@@ -23,7 +23,7 @@ SCRIPT_INITIATOR_URL="https://tcp.hy2.sh"
 SCRIPT_INITIATOR_COMMAND="bash <(curl -fsSL $SCRIPT_INITIATOR_URL)"
 
 # URL of GitHub
-REPO_URL="https://github.com/apernet/tcp-brutal"
+REPO_URL="https://github.com/apernet/tcp-brutals"
 
 # URL of Hysteria 2 API
 HY2_API_BASE_URL="https://api.hy2.io/v1"
@@ -33,8 +33,8 @@ HY2_API_BASE_URL="https://api.hy2.io/v1"
 # export ALL_PROXY=socks5h://192.0.2.1:1080
 CURL_FLAGS=(-L -f -q --retry 5 --retry-delay 10 --retry-max-time 60)
 
-DKMS_MODULE_NAME="tcp-brutal"
-KERNEL_MODULE_NAME="brutal"
+DKMS_MODULE_NAME="tcp-brutals"
+KERNEL_MODULE_NAME="brutals"
 
 
 ###
@@ -60,7 +60,7 @@ curl() {
 }
 
 mktemp() {
-  command mktemp "$@" "/tmp/brutalinst.XXXXXXXXXX"
+  command mktemp "$@" "/tmp/brutalsinst.XXXXXXXXXX"
 }
 
 tput() {
@@ -141,8 +141,8 @@ exec_sudo() {
   # exec sudo with configurable environ preserved.
   local _saved_ifs="$IFS"
   IFS=$'\n'
-  local _preserved_env=(
-    $(env | grep "^PACKAGE_MANAGEMENT_INSTALL=" || true)
+  local _preserved_env=( 
+    $(env | grep "^PACKAGE_MANAGEMENT_INSTALL=" || true) 
     $(env | grep "^FORCE_\w*=" || true)
   )
   IFS="$_saved_ifs"
@@ -442,106 +442,7 @@ vercmp() {
 
   return
 }
-
-
-###
-# ARGUMENTS PARSER
-###
-
-show_usage_and_exit() {
-  echo
-  echo -e "\t${tbold}$(script_name)${treset} - tcp-brutal dkms install script"
-  echo
-  echo -e "Usage:"
-  echo
-  echo -e "${tbold}Install tcp-brutal${treset}"
-  echo -e "\t$(script_name) [install] [ -f | -l <file> | --version <version> ]"
-  echo -e "Options:"
-  echo -e "\t-f, --force\tForce re-install latest or specified version even if it has been installed."
-  echo -e "\t-l, --local <file>\tInstall specified DKMS tarball instead of download it."
-  echo -e "\t--version <version>\tInstall specified version instead of the latest."
-  echo
-  echo -e "${tbold}Uninstall tcp-brutal${treset}"
-  echo -e "\t$(script_name) uninstall"
-  echo
-  echo -e "${tbold}Check for the status & update${treset}"
-  echo -e "\t$(script_name) check"
-  echo
-  echo -e "${tbold}Reload / Unload tcp-brutal kernel module${treset}"
-  echo -e "\t$(script_name) [re]load"
-  echo -e "\t$(script_name) unload"
-  echo
-  echo -e "${tbold}Show this help${treset}"
-  echo -e "\t$(script_name) help"
-  exit 0
-}
-
-check_show_usage_and_exit() {
-  case "$1" in
-    "help")
-      show_usage_and_exit
-      ;;
-  esac
-
-  # if '-h' or '--help' appear in arguments in any position,
-  # display help and exit
-  while [[ "$#" -gt '0' ]]; do
-    case "$1" in
-      '--help' | '-h')
-        show_usage_and_exit
-        ;;
-    esac
-    shift
-  done
-}
-
-
-###
-# DKMS
-###
-
-dkms_get_installed_versions() {
-  local _module="$1"
-
-  local _dkms_moddir="/var/lib/dkms/$_module"
-
-  if [[ ! -d "$_dkms_moddir" ]]; then
-    return
-  fi
-
-  for file in $(command ls "$_dkms_moddir/"); do
-    if [[ -L "$_dkms_moddir/$file" ]]; then
-      # ignore kernel-* symlinks
-      continue
-    fi
-    echo "v$file"
-  done
-}
-
-dkms_remove_modules() {
-  local _module="$1"
-  local _keep_latest="$2"
-
-  local _versions_to_remove=($(dkms_get_installed_versions "$_module"))
-  if [[ -n "$_keep_latest" ]]; then
-    local _latest=""
-    local _new_versions_to_remove
-    _new_versions_to_remove=()
-    for version in "${_versions_to_remove[@]}"; do
-      local _vercmp="$(vercmp "$version" "$_latest")"
-      if [[ "$_vercmp" -gt 0 ]]; then
-        if [[ -n "$_latest" ]]; then
-          _new_versions_to_remove+=("$_latest")
-        fi
-        _latest="$version"
-      else
-        _new_versions_to_remove+=("$version")
-      fi
-    done
-    _versions_to_remove=("${_new_versions_to_remove[@]}")
-  fi
-
-  for version in "${_versions_to_remove[@]}"; do
+for version in "${_versions_to_remove[@]}"; do
     local _dkms_version="${version#v}"
 
     echo -n "Removing DKMS module $_module/$_dkms_version ... "
@@ -668,7 +569,7 @@ get_latest_version() {
   fi
 
   local _tmpfile=$(mktemp)
-  if ! curl -sS "$HY2_API_BASE_URL/update?cver=installscript&arch=generic&plat=linux&chan=tcp-brutal" -o "$_tmpfile"; then
+  if ! curl -sS "$HY2_API_BASE_URL/update?cver=installscript&arch=generic&plat=linux&chan=tcp-brutals" -o "$_tmpfile"; then
     error "Failed to get the latest version from Hysteria 2 API, please check your network and try again."
     exit 11
   fi
@@ -688,7 +589,7 @@ download_dkms_tarball() {
   local _version="$1"
   local _destination="$2"
 
-  local _download_url="$REPO_URL/releases/download/$_version/tcp-brutal.dkms.tar.gz"
+  local _download_url="$REPO_URL/releases/download/$_version/tcp-brutals.dkms.tar.gz"
   echo "Downloading DKMS tarball: $_download_url ..."
   if ! curl -R -H 'Cache-Control: no-cache' "$_download_url" -o "$_destination"; then
     error "Download failed, please check your network and try again."
@@ -807,7 +708,7 @@ perform_install() {
 
   if [[ -z "$_install_needed" ]]; then
     if ! kmod_load_if_unloaded "$KERNEL_MODULE_NAME"; then
-      warning "tcp-brutal is installed but failed to load."
+      warning "tcp-brutals is installed but failed to load."
     fi
 
     echo "${tbold}There is nothing to do today.${treset}"
@@ -815,18 +716,18 @@ perform_install() {
   fi
 
   if ! kmod_unload_if_loaded "$KERNEL_MODULE_NAME"; then
-    warning "tcp-brutal is successfully update, but occupied by other process, please reboot your server to active the latest change."
+    warning "tcp-brutals is successfully update, but occupied by other process, please reboot your server to active the latest change."
     exit 0
   fi
 
   if ! kmod_load_if_unloaded "$KERNEL_MODULE_NAME"; then
-    error "tcp-brutal is successfully installed, but failed to load, this might cause by mismatched linux-headers."
+    error "tcp-brutals is successfully installed, but failed to load, this might cause by mismatched linux-headers."
     error "If you update your system recently, reboot the system might solve this."
     exit 2
   fi
 
   echo
-  echo -e "${tbold}Congratulation! tcp-brutal $_version has been successfully installed and loaded on your server.${treset}"
+  echo -e "${tbold}Congratulation! tcp-brutals $_version has been successfully installed and loaded on your server.${treset}"
 }
 
 perform_uninstall() {
@@ -844,13 +745,13 @@ perform_uninstall() {
   dkms_remove_modules "$DKMS_MODULE_NAME" ""
 
   if ! kmod_unload_if_loaded "$KERNEL_MODULE_NAME"; then
-    warning "tcp-brutal is successfully uninstall from your server, but failed to unload from the kernel."
+    warning "tcp-brutals is successfully uninstall from your server, but failed to unload from the kernel."
     warning "Please reboot your system to unload it from the kernel."
     exit 0
   fi
 
   echo
-  echo -e "${tbold}Congratulation! tcp-brutal has been successfully uninstalled and unloaded."
+  echo -e "${tbold}Congratulation! tcp-brutals has been successfully uninstalled and unloaded."
 }
 
 perform_check() {
