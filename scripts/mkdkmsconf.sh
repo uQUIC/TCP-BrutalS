@@ -13,7 +13,7 @@ pkgver() {
 PACKAGE_VERSION=${PACKAGE_VERSION:-$(pkgver)}
 
 cat << EOF
-PACKAGE_NAME="tcp-brutal"
+PACKAGE_NAME="tcp-brutals"
 PACKAGE_VERSION="$PACKAGE_VERSION"
 
 MAKE[0]="make KERNEL_DIR=\${kernel_source_dir} all"
