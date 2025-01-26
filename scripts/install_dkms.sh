@@ -442,6 +442,91 @@ vercmp() {
 
   return
 }
+###
+# ARGUMENTS PARSER
+###
+show_usage_and_exit() {
+  echo
+  echo -e "\t${tbold}$(script_name)${treset} - tcp-brutals dkms install script"
+  echo
+  echo -e "Usage:"
+  echo
+  echo -e "${tbold}Install tcp-brutals${treset}"
+  echo -e "\t$(script_name) [install] [ -f | -l <file> | --version <version> ]"
+  echo -e "Options:"
+  echo -e "\t-f, --force\tForce re-install latest or specified version even if it has been installed."
+  echo -e "\t-l, --local <file>\tInstall specified DKMS tarball instead of downloading it."
+  echo -e "\t--version <version>\tInstall specified version instead of the latest."
+  echo
+  echo -e "${tbold}Uninstall tcp-brutals${treset}"
+  echo -e "\t$(script_name) uninstall"
+  echo
+  echo -e "${tbold}Check for the status & update${treset}"
+  echo -e "\t$(script_name) check"
+  echo
+  echo -e "${tbold}Reload / Unload tcp-brutals kernel module${treset}"
+  echo -e "\t$(script_name) [re]load"
+  echo -e "\t$(script_name) unload"
+  echo
+  echo -e "${tbold}Show this help${treset}"
+  echo -e "\t$(script_name) help"
+  exit 0
+}
+check_show_usage_and_exit() {
+  case "$1" in
+    "help")
+      show_usage_and_exit
+      ;;
+  esac
+  # if '-h' or '--help' appear in arguments in any position,
+  # display help and exit
+  while [[ "$#" -gt '0' ]]; do
+    case "$1" in
+      '--help' | '-h')
+        show_usage_and_exit
+        ;;
+    esac
+    shift
+  done
+}
+###
+# DKMS
+###
+dkms_get_installed_versions() {
+  local _module="$1"
+  local _dkms_moddir="/var/lib/dkms/$_module"
+  if [[ ! -d "$_dkms_moddir" ]]; then
+    return
+  fi
+  for file in $(command ls "$_dkms_moddir/"); do
+    if [[ -L "$_dkms_moddir/$file" ]]; then
+      # ignore kernel-* symlinks
+      continue
+    fi
+    echo "v$file"
+  done
+}
+dkms_remove_modules() {
+  local _module="$1"
+  local _keep_latest="$2"
+  local _versions_to_remove=($(dkms_get_installed_versions "$_module"))
+  if [[ -n "$_keep_latest" ]]; then
+    local _latest=""
+    local _new_versions_to_remove
+    _new_versions_to_remove=()
+    for version in "${_versions_to_remove[@]}"; do
+      local _vercmp="$(vercmp "$version" "$_latest")"
+      if [[ "$_vercmp" -gt 0 ]]; then
+        if [[ -n "$_latest" ]]; then
+          _new_versions_to_remove+=("$_latest")
+        fi
+        _latest="$version"
+      else
+        _new_versions_to_remove+=("$version")
+      fi
+    done
+    _versions_to_remove=("${_new_versions_to_remove[@]}")
+  fi
 for version in "${_versions_to_remove[@]}"; do
     local _dkms_version="${version#v}"
 
