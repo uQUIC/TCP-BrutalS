@@ -2,7 +2,7 @@
 
 使用方法和TCP-Brutal一模一样。就是水一个拥塞控制算法不然不好交差
 
-TCP-BrutalS is a fork of Brutal, aiming to make brutal more difficult to detect.
+TCP-BrutalS is a fork of Brutal, aiming to make brutal more difficult to detect. See [PEIP-2](https://github.com/uQUIC/PEIPs/blob/main/standards/accepted/2.md) for its specs.
 
 Information about Brutal itself can be found in the [Hysteria documentation](https://hysteria.network/docs/advanced/Full-Server-Config/#bandwidth-behavior-explained). As an official subproject of Hysteria, TCP Brutal is actively maintained to be in sync with the Brutal implementation in Hysteria.
 
