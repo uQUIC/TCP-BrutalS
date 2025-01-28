@@ -1,6 +1,6 @@
 # ![TCP Brutal](logo.png)
 
-## According to [PEIP-5](https://github.com/uQUIC/PEIPs/blob/main/decisions/accepted/2.md), TCP-BrutalS is deprecated. Please use XBBR instead.
+## According to [PEIP-5](https://github.com/uQUIC/PEIPs/blob/main/decisions/accepted/5.md), TCP-BrutalS is deprecated. Please use XBBR instead.
 
 使用方法和TCP-Brutal一模一样。就是水一个拥塞控制算法不然不好交差
 
