@@ -1,5 +1,7 @@
 # ![TCP Brutal](logo.png)
 
+According to [PEIP-5](https://github.com/uQUIC/PEIPs/blob/main/decisions/accepted/2.md), TCP-BrutalS is deprecated. Please use XBBR instead.
+
 使用方法和TCP-Brutal一模一样。就是水一个拥塞控制算法不然不好交差
 
 TCP-BrutalS is a fork of Brutal, aiming to make brutal more difficult to detect. See [PEIP-2](https://github.com/uQUIC/PEIPs/blob/main/standards/accepted/2.md) for its specs.
